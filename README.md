@@ -1,6 +1,6 @@
 # Formal Verification of the Generative Pipeline Hypothesis
 
-[![Verify Lean Proofs](https://github.com/Ryheff24/LiPO-Proof/actions/workflows/verify.yml/badge.svg)](https://github.com/Ryheff24/LiPO-Proof/actions/workflows/verify.yml)
+[![Verify Lean Proofs](https://github.com/Ryheff24/LiPO-Proof/actions/workflows/lean_action_ci.yml/badge.svg)](https://github.com/Ryheff24/LiPO-Proof/actions/workflows/lean_action_ci.yml)
 
 Lean 4 proofs supporting the paper *"Generative Pipeline Hypothesis in Recommendation Systems: On the Structural Limitations of Listwise Preference Optimization via LambdaRank Objectives"* by Ryan Heffernan.
 
