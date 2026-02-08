@@ -1,14 +1,45 @@
-name: Lean Action CI
+name: Verify Lean Proofs
 
 on:
   push:
+    branches: [main]
   pull_request:
-  workflow_dispatch:
+    branches: [main]
 
 jobs:
-  build:
+  verify:
+    name: Build and verify proofs
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v5
-      - uses: leanprover/lean-action@v1
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install elan (Lean version manager)
+        run: |
+          curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      - name: Cache Mathlib
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            .lake
+          key: lean-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
+          restore-keys: lean-
+
+      - name: Fetch Mathlib cache
+        run: lake exe cache get || true
+
+      - name: Build project
+        run: lake build
+
+      - name: Verify no sorry
+        run: |
+          echo "Checking for sorry in proof files..."
+          if grep -r "sorry" Lipo/*.lean --include="*.lean" | grep -v "^.*:.*--" | grep -v "sorry placeholder"; then
+            echo "ERROR: Found sorry in proof files"
+            exit 1
+          else
+            echo "All proofs verified — no sorry found"
+          fi
