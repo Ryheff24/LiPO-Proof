@@ -21,28 +21,71 @@ These proofs are not checked by a human or by AI — they are checked by Lean's 
 
 | File | Paper Reference | Result |
 |------|----------------|--------|
-| `Lipo/submodular.lean` | Example 4.1 | **Coverage utility is submodular.** For any collection of subsets C indexed by a finite set I, the function U(S) = \|⋃\_{i∈S} C(i)\| satisfies the diminishing returns property. |
-| `Lipo/maximized.lean` | Lemma 3.1 | **Rearrangement inequality for rankings.** If v is strictly decreasing and g is strictly increasing, then Σ v(k)·g(r\_{π(k)}) is maximized when π sorts r in descending order. |
-| `Lipo/argmax.lean` | Lemma 4.2 | **NDCG-optimal set equals top-K by gain.** Any set S of size K that maximizes DCG (over all internal orderings) must consist of the K items with the largest gain values. Proved via an exchange lemma. |
+| `submodular.lean` | Example 4.1 | **Coverage utility is submodular.** For any collection of subsets C indexed by a finite set I, the function U(S) = \|⋃\_{i∈S} C(i)\| satisfies the diminishing returns property. |
+| `maximized.lean` | Lemma 3.1 | **Rearrangement inequality for rankings.** If v is strictly decreasing and g is strictly increasing, then Σ v(k)·g(r\_{π(k)}) is maximized when π sorts r in descending order. |
+| `argmax.lean` | Lemma 4.2 | **NDCG-optimal set equals top-K by gain.** Any set S of size K that maximizes DCG must consist of the K items with the largest gain values. Proved via an exchange lemma. |
+| `homogeneity.lean` | Section 4 (new) | **Low coverage implies high homogeneity.** Under a similarity structure where intra-category similarity ≥ s\_high and inter-category similarity ≤ s\_low, sets covering fewer categories have higher average pairwise similarity. |
 
 ### Main Theorems
 
 | File | Paper Reference | Result |
 |------|----------------|--------|
-| `Lipo/coverage.lean` | Theorem 4.3 | **Submodular misalignment gap is Ω(K).** Constructs K groups of K items where the relevance-optimal set achieves coverage utility 1, while the coverage-optimal set achieves K. The ratio U(S\*)/U(T) = K. |
-| `Lipo/gini.lean` | Section 3 (new) | **Gini lower bound under head/tail concentration.** If items are partitioned into head H and tail T with all head exposures ≥ all tail exposures and 2\|H\| ≤ n, then G ≥ ((E\_H − E\_T)/(E\_H + E\_T))·(1 − \|H\|/n). Includes a counterexample showing the assumption \|H\| ≤ n/2 is necessary. |
+| `coverage.lean` | Theorem 4.3 | **Submodular misalignment gap is Ω(K).** Constructs K groups of K items where the relevance-optimal set achieves coverage utility 1, while the coverage-optimal set achieves K. |
+| `gini.lean` | Section 3 (new) | **Gini lower bound under head/tail concentration.** If items are partitioned into head H and tail T with all head exposures ≥ all tail exposures and 2\|H\| ≤ n, then G ≥ ((E\_H − E\_T)/(E\_H + E\_T))·(1 − \|H\|/n). Includes a counterexample showing the assumption is necessary. |
+| `highergini.lean` | Hypothesis I | **NDCG-optimal policy produces strictly higher Gini than exposure-adjusted policy.** Under the two-tier exposure model (see below), G(Policy A) > G(Policy B) when 2Kh < n(2K−1). |
 
 ### Strengthening Results
 
 | File | Paper Reference | Result |
 |------|----------------|--------|
-| `Lipo/approximationgreed.lean` | Section 4.4 | **Nemhauser-Wolsey-Fisher (1978).** For monotone submodular maximization under a cardinality constraint, the greedy algorithm achieves a (1 − 1/e) ≈ 0.632 approximation ratio. Combined with Theorem 4.3, this shows greedy submodular-aware methods provably achieve ≥ 63% of optimal, while NDCG can achieve as little as 1/K. |
+| `approximationgreed.lean` | Section 4.4 | **Nemhauser-Wolsey-Fisher (1978).** Greedy monotone submodular maximization under cardinality constraints achieves a (1 − 1/e) ≈ 0.632 approximation ratio. |
 
 ### Setup
 
 | File | Description |
 |------|-------------|
-| `Lipo/Prelude.lean` | Imports Mathlib and sets compiler options. |
+| `Prelude.lean` | Imports Mathlib and sets compiler options. |
+
+## The Two-Tier Exposure Model
+
+The restricted Hypothesis I proof (`highergini.lean`) uses a two-tier model that captures the core mechanism of NDCG-induced exposure inequality.
+
+### Setup
+
+- **n** items partitioned into a **head set** H of size h and a **tail set** T of size n − h
+- **m** users, each receiving **K** recommendations
+- Head items have higher relevance than tail items (R\_H > R\_T)
+- h ≥ K (enough head items to fill all slots)
+
+### Policy A (NDCG-Optimal)
+
+NDCG optimization sorts by relevance, so all K slots go to head items:
+
+| Item type | Exposure |
+|-----------|----------|
+| Head (h items) | mK / h |
+| Tail (n − h items) | 0 |
+
+### Policy B (Exposure-Adjusted)
+
+The exposure-adjusted discount penalizes high-exposure items, causing one slot per user to shift to a tail item:
+
+| Item type | Exposure |
+|-----------|----------|
+| Head (h items) | m(K−1) / h |
+| Tail (n − h items) | m / (n − h) |
+
+### Proven Result
+
+Under the condition **2Kh < n(2K − 1)** — which holds whenever the head set is a minority of the catalog (h < n/2) and K ≥ 1 — the Gini coefficient of Policy A is strictly greater than that of Policy B:
+
+> **G(Policy A) > G(Policy B)**
+
+This formalizes the intuition that pure NDCG optimization concentrates exposure on popular items, while exposure-adjusted ranking distributes it more equitably.
+
+### Interpreting the Condition
+
+The condition 2Kh < n(2K − 1) is equivalent to h/n < 1 − 1/(2K). For typical recommendation settings (K = 10, h/n = 0.1), this is easily satisfied: 0.1 < 0.95. The condition fails only when the head set is nearly the entire catalog, at which point the distinction between "head" and "tail" becomes meaningless.
 
 ## Logical Dependencies
 
@@ -51,35 +94,42 @@ Prelude.lean
   ├── submodular.lean ─────────────┐
   ├── maximized.lean ──┐           │
   │                    ├── argmax.lean ──┤
-  ├── coverage.lean ───────────────┤ → Hypothesis II chain
-  ├── gini.lean ───────────────────┤ → Hypothesis I chain
-  └── approximationgreed.lean ─────┘
+  ├── homogeneity.lean ────────────┤ → Hypothesis II chain
+  ├── coverage.lean ───────────────┘
+  ├── gini.lean ───────────────────┐
+  ├── highergini.lean ─────────────┘ → Hypothesis I chain
+  └── approximationgreed.lean ─────── → Strengthening
 ```
 
 ## How the Proofs Support the Paper
 
-### Hypothesis II (Homogeneous Recommendations) — Proof Chain Complete
+### Hypothesis II (Homogeneous Recommendations) — Complete Proof Chain
 
-The paper's central claim is that NDCG-optimized LiPO produces homogeneous recommendations when user utility is submodular. The verified proof chain:
+Under Assumption 4.2 (high-relevance items tend to be similar), the following verified chain establishes that LiPO produces homogeneous, suboptimal recommendations:
 
-1. **NDCG picks top-K by individual gain** (`argmax.lean`) — NDCG optimization reduces to selecting the K highest-gain items, an additive objective.
-2. **Coverage utility is submodular** (`submodular.lean`) — User utility over diverse content exhibits diminishing returns.
-3. **Additive-optimal can be Ω(K) worse than submodular-optimal** (`coverage.lean`) — The gap between what NDCG selects and what maximizes user utility can grow linearly with list size.
-4. **Greedy submodular methods achieve (1−1/e) of optimal** (`approximationgreed.lean`) — Known algorithms provably do much better than NDCG at capturing submodular utility.
+1. **NDCG picks top-K by individual gain** (`argmax.lean`)
+2. **Coverage utility is submodular** (`submodular.lean`)
+3. **Top-K by gain can be Ω(K) worse than submodular-optimal** (`coverage.lean`)
+4. **Low coverage implies high homogeneity** (`homogeneity.lean`)
+5. **Greedy submodular methods achieve (1−1/e) of optimal** (`approximationgreed.lean`)
 
-Under Assumption 4.2 of the paper (high-relevance items tend to be similar), these results establish that LiPO-optimized policies produce recommendations with higher homogeneity and lower realized user utility than diversity-aware alternatives.
+Assumption 4.2 is empirical and requires dataset validation — every other link is machine-verified.
 
-### Hypothesis I (Long-Tail Exposure Inequality) — Foundation Verified
+### Hypothesis I (Long-Tail Exposure Inequality) — Proven Restricted Case
 
-1. **NDCG-optimal rankings sort by relevance** (`maximized.lean`) — Under long-tail distributions, this concentrates exposure on head items.
-2. **Gini lower bound** (`gini.lean`) — Quantifies the minimum exposure inequality when exposure is concentrated in a small head set.
+1. **NDCG-optimal rankings sort by relevance** (`maximized.lean`)
+2. **Exposure concentration produces high Gini** (`gini.lean`)
+3. **Under the two-tier model, NDCG-optimal Gini > exposure-adjusted Gini** (`highergini.lean`)
+
+The two-tier model is a tractable special case. The general hypothesis (arbitrary relevance distributions) remains a conjecture supported by this proven case and empirical validation.
 
 ## Building
 
 ```bash
-# Requires Lean 4 and Mathlib
 lake build
 ```
+
+First build downloads Mathlib and takes ~15–20 minutes. Subsequent builds use the cache and take 2–5 minutes.
 
 ## Citation
 
@@ -95,7 +145,7 @@ If you use these proofs, please cite both the paper and Aristotle:
 }
 ```
 
-All proof files include Aristotle attribution headers. Per Harmonic's guidelines, add as co-author to commits:
+All proof files include Aristotle attribution headers. Per Harmonic's guidelines:
 
 ```
 Co-authored-by: Aristotle (Harmonic) <aristotle-harmonic@harmonic.fun>
