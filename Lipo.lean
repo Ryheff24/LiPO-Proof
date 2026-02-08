@@ -7,4 +7,4 @@ import Lipo.coverage
 import Lipo.gini
 import Lipo.maximized
 import Lipo.submodular
-
+import Lipo.highergini
