@@ -1,0 +1,1176 @@
+\documentclass[11pt,a4paper]{article}
+
+% ============================================================================
+% PACKAGES
+% ============================================================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{thmtools}
+\usepackage{xcolor}
+\usepackage{titlesec}
+
+% ============================================================================
+% PAGE GEOMETRY
+% ============================================================================
+\geometry{margin=1in}
+
+% ============================================================================
+% THEOREM ENVIRONMENTS
+% ============================================================================
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{assumption}{Assumption}[section]
+\newtheorem{example}{Example}[section]
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\theoremstyle{remark}
+\newtheorem{hypothesis}{Hypothesis}
+\newtheorem{remark}{Remark}[section]
+
+% ============================================================================
+% CUSTOM COMMANDS
+% ============================================================================
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\DCG}{\mathrm{DCG}}
+\newcommand{\NDCG}{\mathrm{NDCG}}
+\newcommand{\IDCG}{\mathrm{IDCG}}
+\newcommand{\rel}{\mathrm{rel}}
+\newcommand{\rank}{\mathrm{rank}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\DeclareMathOperator{\gain}{gain}
+\DeclareMathOperator{\discount}{discount}
+\DeclareMathOperator{\exposure}{exposure}
+
+% Lean verification marker
+\newcommand{\leanmark}{\textsuperscript{\textcolor{green!50!black}{[L4]}}}
+
+% ============================================================================
+% HYPERREF SETUP
+% ============================================================================
+\hypersetup{
+    hidelinks,
+    pdftitle={Generative Pipeline Hypothesis in Recommendation Systems},
+    pdfauthor={Ryan Heffernan}
+}
+
+% ============================================================================
+% DOCUMENT
+% ============================================================================
+\begin{document}
+
+% ----------------------------------------------------------------------------
+% TITLE
+% ----------------------------------------------------------------------------
+\title{%
+    \textbf{Generative Pipeline Hypothesis in Recommendation Systems:}\\[0.5em]
+    \Large On the Structural Limitations of Listwise Preference Optimization\\
+    via LambdaRank Objectives
+}
+\author{
+    Ryan Heffernan\\
+    \small \texttt{[Institution/Affiliation]}
+}
+\date{\today}
+
+\maketitle
+
+% ----------------------------------------------------------------------------
+% ABSTRACT
+% ----------------------------------------------------------------------------
+\begin{abstract}
+We present a formal mathematical framework examining the structural limitations of Listwise Preference Optimization (LiPO) when applied to generative recommendation systems. By analyzing the theoretical foundations connecting LiPO to LambdaRank objectives and their optimization of Normalized Discounted Cumulative Gain (NDCG), we establish two central results: (1) the \textit{Long-Tail Distribution Theorem} (restricted form), which proves that NDCG-based optimization produces strictly higher exposure inequality than exposure-aware alternatives under a two-tier relevance model, and (2) the \textit{Homogeneous Recommendation Theorem} (conditional form), which proves that objectives lacking consumption constraints fail to capture submodular user utility structures, producing redundant recommendations with a utility gap of $\Omega(K)$. Core mathematical claims---including the rearrangement inequality for rankings, submodularity of coverage utility, the $\Omega(K)$ misalignment gap, the Nemhauser-Wolsey-Fisher greedy approximation bound, and the Gini comparison between policies---have been \textbf{formally verified in Lean~4} using the Aristotle automated theorem prover~\cite{aristotle2025}. Lean proof scripts are available at \url{https://github.com/Ryheff24/LiPO-Proof}. We propose formal remediation strategies including exposure-adjusted rank discounting and coverage-constrained regularization frameworks.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+% SECTION 1: INTRODUCTION
+% ============================================================================
+\section{Introduction}
+\label{sec:introduction}
+
+The emergence of large language models (LLMs) as recommendation engines has necessitated a paradigm shift from traditional collaborative filtering approaches toward preference-based optimization frameworks. Central to this evolution is the transition from pairwise preference optimization methods, such as Direct Preference Optimization (DPO), to listwise approaches that can capture the full ranking structure of recommendation outputs.
+
+Listwise Preference Optimization (LiPO) \cite{liu2024lipo} represents a significant advancement in this direction, building upon the theoretical foundations of LambdaRank \cite{burges2010ranknet} to directly optimize ranking metrics such as Normalized Discounted Cumulative Gain (NDCG). However, we argue that this optimization target, while mathematically elegant, introduces systematic biases that fundamentally conflict with the broader objectives of recommendation systems.
+
+\subsection{The Generative Context}
+\label{subsec:generative_context}
+
+Our analysis is particularly relevant to \textit{generative} recommendation systems, where an LLM produces ranked lists through autoregressive token generation. Unlike traditional retrieval-based systems that select from a fixed candidate set, generative systems construct recommendations token-by-token. This distinction is critical for two reasons:
+
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{Mode Collapse Amplification}: LLMs are known to suffer from mode collapse---the tendency to repeatedly generate high-probability sequences. When combined with NDCG optimization (which rewards concentration on high-relevance items), this creates a compounding effect: the model learns to generate the same ``safe'' high-value items, and the autoregressive generation process reinforces this pattern at each token position.
+    
+    \item \textbf{Implicit Factorization}: The listwise probability in LiPO decomposes autoregressively, mirroring how LLMs generate sequences. This tight coupling means that biases in the training objective directly manifest in generation dynamics.
+\end{enumerate}
+
+\subsection{Contributions}
+
+This paper makes the following contributions:
+
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{Theorem I (Long-Tail, Restricted Form)}: Under a two-tier relevance model, we prove that NDCG-optimized policies produce strictly higher exposure Gini coefficients than exposure-adjusted alternatives (Theorem~\ref{thm:gini_comparison}). The general Long-Tail Distribution Hypothesis (Hypothesis~\ref{hyp:longtail}) is stated as a conjecture motivated by this proven special case.
+    
+    \item \textbf{Theorem II (Homogeneity, Conditional Form)}: Under the empirically testable Assumption~\ref{assump:similarity}, we prove that NDCG-optimal recommendations diverge from utility-optimal recommendations with a gap of $\Omega(K)$, and that this gap implies higher recommendation homogeneity (Theorem~\ref{thm:conditional_homogeneity}).
+    
+    \item \textbf{Formal Verification}: Eight core mathematical results have been formally verified in Lean~4 using the Aristotle automated theorem prover~\cite{aristotle2025}. Statements marked with \leanmark{} have machine-checked proofs; see Section~\ref{subsec:formal_verification} and the proof repository at \url{https://github.com/Ryheff24/LiPO-Proof}.
+    
+    \item \textbf{Remediation Framework}: We propose Fair Diverse LiPO (FD-LiPO), combining exposure-adjusted discounting with coverage-constrained regularization, and prove that greedy submodular methods achieve a $(1 - 1/e)$ approximation ratio (Theorem~\ref{thm:nwf}).
+\end{enumerate}
+
+\subsection{Formal Verification}
+\label{subsec:formal_verification}
+
+A distinguishing feature of this work is that core mathematical claims are not merely proved on paper but have been \textbf{formally verified} by the Lean~4 proof assistant~\cite{lean4}. Lean's kernel is a small deterministic program that mechanically validates every logical step from axioms to conclusion. If a proof file compiles without errors or incomplete markers (\texttt{sorry}), the result is correct with mathematical certainty---no human review of proof steps is required.
+
+The following results carry Lean~4 verification, indicated by \leanmark{} throughout the paper:
+\begin{enumerate}[label=(\arabic*)]
+    \item Rearrangement inequality for rankings (Lemma~\ref{lem:utility_max})
+    \item NDCG-optimal set equals top-$K$ by gain (Lemma~\ref{lem:ndcg_additive})
+    \item Submodularity of coverage utility (Lemma~\ref{lem:coverage_submodular})
+    \item Submodular misalignment gap is $\Omega(K)$ (Theorem~\ref{thm:submodular_misalign})
+    \item Gini lower bound under head/tail concentration (Proposition~\ref{prop:gini_lower_bound})
+    \item NDCG-optimal Gini $>$ exposure-adjusted Gini (Theorem~\ref{thm:gini_comparison})
+    \item Nemhauser-Wolsey-Fisher greedy approximation (Theorem~\ref{thm:nwf})
+    \item Low coverage implies high homogeneity (Lemma~\ref{lem:coverage_homogeneity})
+\end{enumerate}
+
+Proofs were generated by Aristotle (Harmonic)~\cite{aristotle2025}, which translates natural-language theorem statements into Lean~4 tactic proofs over Mathlib. The complete Lean project is available at \url{https://github.com/Ryheff24/LiPO-Proof} with continuous integration verifying all proofs on every commit.
+
+% ============================================================================
+% SECTION 2: PRELIMINARIES
+% ============================================================================
+\section{Preliminaries and Notation}
+\label{sec:preliminaries}
+
+% ----------------------------------------------------------------------------
+% 2.1 Basic Notation
+% ----------------------------------------------------------------------------
+\subsection{Basic Notation}
+\label{subsec:notation}
+
+Let $\mathcal{U}$ denote the set of users with $|\mathcal{U}| = m$, and let $\mathcal{I}$ denote the item catalog with $|\mathcal{I}| = n$. For a user $u \in \mathcal{U}$ and item $i \in \mathcal{I}$, we define:
+
+\begin{definition}[Relevance Function]
+\label{def:relevance}
+The relevance function $r: \mathcal{U} \times \mathcal{I} \rightarrow \R_{\geq 0}$ maps user-item pairs to non-negative relevance scores, where $r(u, i)$ represents the ground-truth relevance of item $i$ to user $u$.
+\end{definition}
+
+\begin{definition}[Ranking Function]
+\label{def:ranking}
+A ranking function $\pi: \mathcal{U} \rightarrow \mathcal{S}_n$ maps each user to a permutation of items, where $\mathcal{S}_n$ denotes the symmetric group on $n$ elements. We write $\pi_u(k)$ to denote the item at position $k$ in the ranking for user $u$, and $\pi_u^{-1}(i)$ to denote the position of item $i$.
+\end{definition}
+
+\begin{definition}[Recommendation Set]
+\label{def:recset}
+For a user $u$ and cutoff $K \in \mathbb{N}$, the recommendation set is defined as:
+\begin{equation}
+    S_K(u; \pi) = \{\pi_u(1), \pi_u(2), \ldots, \pi_u(K)\}
+\end{equation}
+\end{definition}
+
+% ----------------------------------------------------------------------------
+% 2.2 Utility Measures
+% ----------------------------------------------------------------------------
+\subsection{Utility Measures for Ranking Evaluation}
+\label{subsec:utility}
+
+\begin{definition}[Discounted Cumulative Gain]
+\label{def:dcg}
+For a user $u$ with ranking $\pi$ and cutoff $K$, the Discounted Cumulative Gain is:
+\begin{equation}
+    \DCG_K(u; \pi) = \sum_{k=1}^{K} \frac{\gain(r(u, \pi_u(k)))}{\discount(k)}
+\end{equation}
+where the gain function is typically $\gain(r) = 2^r - 1$ and the discount function is $\discount(k) = \log_2(k + 1)$.
+\end{definition}
+
+\begin{definition}[Normalized Discounted Cumulative Gain]
+\label{def:ndcg}
+The NDCG normalizes DCG by the ideal ranking:
+\begin{equation}
+    \NDCG_K(u; \pi) = \frac{\DCG_K(u; \pi)}{\IDCG_K(u)}
+\end{equation}
+where $\IDCG_K(u) = \max_{\pi' \in \mathcal{S}_n} \DCG_K(u; \pi')$ is achieved by sorting items in descending order of relevance.
+\end{definition}
+
+\begin{remark}
+The NDCG metric satisfies $\NDCG_K(u; \pi) \in [0, 1]$ for all $u, \pi$, with equality to 1 if and only if the top-$K$ items are the $K$ most relevant items in optimal order.
+\end{remark}
+
+% ----------------------------------------------------------------------------
+% 2.3 LambdaRank
+% ----------------------------------------------------------------------------
+\subsection{LambdaRank Framework}
+\label{subsec:lambdarank}
+
+LambdaRank \cite{burges2010ranknet} provides a gradient-based approach to directly optimize ranking metrics by defining pseudo-gradients (lambdas) that approximate the gradient of the target metric.
+
+\begin{definition}[Lambda Weights]
+\label{def:lambda}
+For a scoring function $f_\theta: \mathcal{U} \times \mathcal{I} \rightarrow \R$ parameterized by $\theta$, the lambda weight for a pair of items $(i, j)$ with $r(u, i) > r(u, j)$ is the scalar:
+\begin{equation}
+    \lambda_{ij}^{(u)} = |\Delta \NDCG_{ij}^{(u)}| \cdot \sigma\!\left(-(f_\theta(u, i) - f_\theta(u, j))\right)
+\end{equation}
+where $|\Delta \NDCG_{ij}^{(u)}|$ is the absolute change in NDCG from swapping items $i$ and $j$, and $\sigma$ is the sigmoid function. The parameter gradient of the LambdaRank loss is then:
+\begin{equation}
+    \nabla_\theta \mathcal{L}_{\text{LR}} = \sum_{u \in \mathcal{U}} \sum_{\substack{i, j \in \mathcal{I} \\ r(u,i) > r(u,j)}} \lambda_{ij}^{(u)} \cdot \nabla_\theta(f_\theta(u, i) - f_\theta(u, j))
+\end{equation}
+\end{definition}
+
+% LambdaRank loss gradient is given in Definition~\ref{def:lambda} above.
+
+% ----------------------------------------------------------------------------
+% 2.4 LiPO with Plackett-Luce
+% ----------------------------------------------------------------------------
+\subsection{Listwise Preference Optimization (LiPO)}
+\label{subsec:lipo}
+
+LiPO \cite{liu2024lipo} extends preference optimization to the listwise setting. To make the formulation precise, we first introduce the generative model for listwise preferences.
+
+\begin{definition}[Plackett--Luce Model]
+\label{def:plackett_luce}
+Given a scoring function $s: \mathcal{I} \rightarrow \R$ and a set of items $\mathcal{C} \subseteq \mathcal{I}$, the Plackett--Luce model defines the probability of generating a ranking $\bm{y} = (y_1, y_2, \ldots, y_K)$ of distinct items as:
+\begin{equation}
+    P_{\text{PL}}(\bm{y} \mid \mathcal{C}, s) = \prod_{k=1}^{K} \frac{\exp(s(y_k))}{\sum_{i \in \mathcal{C} \setminus \{y_1, \ldots, y_{k-1}\}} \exp(s(i))}
+\end{equation}
+At each position $k$, item $y_k$ is selected from the remaining candidates $\mathcal{C} \setminus \{y_1, \ldots, y_{k-1}\}$ with probability proportional to $\exp(s(y_k))$.
+\end{definition}
+
+\begin{remark}[Autoregressive Interpretation]
+The Plackett-Luce factorization mirrors autoregressive generation in LLMs: at each position $k$, the model samples from a softmax over remaining items, conditioned on previous selections. This connection is why LiPO is particularly suited to generative recommendation systems.
+\end{remark}
+
+\begin{definition}[LiPO Objective]
+\label{def:lipo}
+Let $\pi_\theta$ be a policy parameterized by $\theta$ that assigns scores $s_\theta(i \mid u)$ to items for user $u$. Let $\pi_{\text{ref}}$ be a reference policy. Given preference data where ranking $\bm{y}^+$ is preferred over $\bm{y}^-$, the LiPO objective with LambdaRank weighting is:
+\begin{equation}
+    \mathcal{L}_{\text{LiPO}}(\theta) = -\E_{u, \bm{y}^+, \bm{y}^-} \left[ \sum_{k=1}^{K} w_k \cdot \log \sigma\left( \log \frac{P_{\text{PL}}(y_k^+ \mid \mathcal{C}_k, s_\theta)}{P_{\text{PL}}(y_k^+ \mid \mathcal{C}_k, s_{\text{ref}})} - \log \frac{P_{\text{PL}}(y_k^- \mid \mathcal{C}_k, s_\theta)}{P_{\text{PL}}(y_k^- \mid \mathcal{C}_k, s_{\text{ref}})} \right) \right]
+\end{equation}
+where $\mathcal{C}_k$ is the candidate set at position $k$, and $w_k = |\Delta \NDCG_k|$ incorporates NDCG-derived position weights.
+\end{definition}
+
+\begin{proposition}[LiPO-LambdaRank Structural Analogy]
+\label{prop:lipo_lambda}
+Under the Plackett--Luce model, when the position weights $w_k$ are set to $|\Delta \NDCG_k|$ and the reference policy is uniform, the LiPO gradient shares the same structural form as the LambdaRank gradient: both weight pairwise score differences by NDCG-change magnitudes passed through a sigmoid. The key difference is that the Plackett--Luce gradient involves listwise normalization (the softmax denominator depends on all remaining items), while LambdaRank terms are strictly pairwise. The two coincide in the limit of large score differences but differ in general.
+\end{proposition}
+
+\begin{proof}[Proof Sketch]
+The Plackett-Luce log-probability difference at position $k$ reduces to:
+\begin{equation}
+    \log \frac{P_{\text{PL}}(y_k^+ \mid \mathcal{C}_k, s_\theta)}{P_{\text{PL}}(y_k^- \mid \mathcal{C}_k, s_\theta)} = s_\theta(y_k^+) - s_\theta(y_k^-) + \text{(normalization terms)}
+\end{equation}
+When aggregated with $|\Delta \NDCG_k|$ weights across all position pairs and passed through a sigmoid, the gradient with respect to $\theta$ matches the LambdaRank gradient structure.
+\end{proof}
+
+% ============================================================================
+% SECTION 3: HYPOTHESIS I - LONG TAIL
+% ============================================================================
+\section{Long-Tail Distribution: From Hypothesis to Theorem}
+\label{sec:hypothesis1}
+
+% ----------------------------------------------------------------------------
+% 3.1 Theoretical Foundation
+% ----------------------------------------------------------------------------
+\subsection{Theoretical Foundation}
+\label{subsec:h1_foundation}
+
+We begin by establishing the theoretical connection between utility-based ranking measures and the long-tail distribution problem.
+
+\begin{definition}[Item Utility]
+\label{def:item_utility}
+For an item $i \in \mathcal{I}$, define the aggregate utility function:
+\begin{equation}
+    u(i \mid \mathcal{U}) = \sum_{u \in \mathcal{U}} r(u, i)
+\end{equation}
+representing the total relevance of item $i$ across all users.
+\end{definition}
+
+\begin{definition}[Long-Tail Distribution]
+\label{def:longtail}
+The item catalog $\mathcal{I}$ exhibits a long-tail distribution if there exists a partition $\mathcal{I} = \mathcal{I}_{\text{head}} \cup \mathcal{I}_{\text{tail}}$ such that:
+\begin{equation}
+    |\mathcal{I}_{\text{head}}| \ll |\mathcal{I}_{\text{tail}}| \quad \text{and} \quad \sum_{i \in \mathcal{I}_{\text{head}}} u(i \mid \mathcal{U}) > \sum_{i \in \mathcal{I}_{\text{tail}}} u(i \mid \mathcal{U})
+\end{equation}
+\end{definition}
+
+\begin{lemma}[Utility Maximization Principle\leanmark]
+\label{lem:utility_max}
+For any utility measure $U: \mathcal{S}_n \rightarrow \R$ that decomposes as:
+\begin{equation}
+    U(\pi; u) = \sum_{k=1}^{n} v(k) \cdot g(r(u, \pi_u(k)))
+\end{equation}
+where $v: \mathbb{N} \rightarrow \R_{>0}$ is a strictly decreasing position discount function and $g: \R_{\geq 0} \rightarrow \R_{\geq 0}$ is a strictly increasing gain function, the utility is maximized by sorting items in descending order of relevance:
+\begin{equation}
+    \pi^* = \argmax_{\pi \in \mathcal{S}_n} U(\pi; u) \implies r(u, \pi^*_u(k)) \geq r(u, \pi^*_u(k+1)) \quad \forall k
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+This is the rearrangement inequality applied to rankings. Suppose $\pi^*$ is not sorted by descending relevance. Then there exist positions $k < k'$ such that $r(u, \pi^*_u(k)) < r(u, \pi^*_u(k'))$. Let $\pi'$ be the permutation obtained by swapping positions $k$ and $k'$. Then:
+\begin{align}
+    U(\pi'; u) - U(\pi^*; u) &= [v(k) - v(k')][g(r(u, \pi^*_u(k'))) - g(r(u, \pi^*_u(k)))]
+\end{align}
+Since $k < k'$, we have $v(k) > v(k')$ (strictly decreasing) and $g(r(u, \pi^*_u(k))) < g(r(u, \pi^*_u(k')))$ (strictly increasing composed with the relevance gap). Thus $U(\pi'; u) > U(\pi^*; u)$, contradicting optimality.
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/maximized.lean} --- proved via Mathlib's \texttt{Monovary.sum\_mul\_comp\_perm\_le\_sum\_mul}.
+\end{proof}
+
+% ----------------------------------------------------------------------------
+% 3.2 Exposure Formalization
+% ----------------------------------------------------------------------------
+\subsection{Exposure Formalization}
+\label{subsec:exposure}
+
+\begin{definition}[Item Exposure]
+\label{def:exposure}
+For an item $i \in \mathcal{I}$ under a recommendation policy $\pi$, define the exposure:
+\begin{equation}
+    \exposure(i; \pi) = \sum_{u \in \mathcal{U}} \sum_{k=1}^{K} \mathbb{1}[\pi_u(k) = i] \cdot \phi(k)
+\end{equation}
+where $\phi: \{1, \ldots, K\} \rightarrow [0, 1]$ is a position-based visibility function with $\phi(1) \geq \phi(2) \geq \cdots \geq \phi(K)$.
+\end{definition}
+
+\begin{definition}[Historical Exposure (Exogenous)]
+\label{def:hist_exposure}
+Let $\exposure_{\text{hist}}: \mathcal{I} \rightarrow \R_{\geq 0}$ denote the historical exposure of items computed from logged deployment traffic. This is treated as \textbf{exogenous} and fixed during each training iteration---specifically, it is an exponential moving average (EMA) of past exposure:
+\begin{equation}
+    \exposure_{\text{hist}}^{(t+1)}(i) = \alpha \cdot \exposure_{\text{hist}}^{(t)}(i) + (1 - \alpha) \cdot \exposure_{\text{batch}}^{(t)}(i)
+\end{equation}
+where $\alpha \in (0, 1)$ is a smoothing parameter and $\exposure_{\text{batch}}^{(t)}(i)$ is the exposure observed in training batch $t$.
+\end{definition}
+
+\begin{definition}[Exposure Gini Coefficient]
+\label{def:exposure_gini}
+The exposure Gini coefficient for a recommendation policy $\pi$ is:
+\begin{equation}
+    G_{\text{exp}}(\pi) = \frac{\sum_{i, j \in \mathcal{I}} |\exposure(i; \pi) - \exposure(j; \pi)|}{2n \sum_{i \in \mathcal{I}} \exposure(i; \pi)}
+\end{equation}
+where $G_{\text{exp}} \in [0, 1]$, with 0 indicating perfect equality and 1 indicating maximum inequality.
+\end{definition}
+
+% ----------------------------------------------------------------------------
+% 3.3 Gini Lower Bound
+% ----------------------------------------------------------------------------
+\subsection{Gini Lower Bound Under Exposure Concentration}
+\label{subsec:gini_bound}
+
+We first establish a general lower bound on the Gini coefficient when exposure is concentrated in a head set.
+
+\begin{proposition}[Gini Lower Bound\leanmark]
+\label{prop:gini_lower_bound}
+Let $n \geq 2$ and let $e: \{1, \ldots, n\} \to \R_{\geq 0}$ be an exposure vector with $\sum_i e_i > 0$. Suppose items are partitioned into a head set $H$ and tail set $T = H^c$ such that $e_i \geq e_j$ for all $i \in H, j \in T$, and $2|H| \leq n$. Let $E_H = \sum_{i \in H} e_i$ and $E_T = \sum_{i \in T} e_i$. Then:
+\begin{equation}
+    G(e) \geq \frac{E_H - E_T}{E_H + E_T} \cdot \left(1 - \frac{|H|}{n}\right)
+\end{equation}
+The assumption $2|H| \leq n$ is necessary: the counterexample $n = 3$, $|H| = 2$, $e = (10, 10, 1)$ shows the bound can fail when the head set is a majority.
+\end{proposition}
+
+\begin{proof}
+The numerator of the Gini coefficient satisfies:
+\begin{equation}
+    \sum_{i,j} |e_i - e_j| \geq 2\left(|T| \cdot E_H - |H| \cdot E_T\right)
+\end{equation}
+by restricting the double sum to cross-terms between $H$ and $T$ and using $e_i \geq e_j$ for $i \in H, j \in T$. Substituting $|T| = n - |H|$ and dividing by $2n(E_H + E_T)$ gives the result. The condition $2|H| \leq n$ ensures $|T| \cdot E_H - |H| \cdot E_T$ dominates appropriately.
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/gini.lean} --- full proof with counterexample.
+\end{proof}
+
+% ----------------------------------------------------------------------------
+% 3.4 Two-Tier Model and Restricted Theorem
+% ----------------------------------------------------------------------------
+\subsection{The Two-Tier Exposure Model}
+\label{subsec:two_tier}
+
+To make the long-tail hypothesis precise and provable, we introduce a tractable model that captures the core mechanism of NDCG-induced exposure inequality.
+
+\begin{definition}[Two-Tier Model]
+\label{def:two_tier}
+The two-tier exposure model consists of:
+\begin{itemize}
+    \item $n$ items partitioned into a \textbf{head set} $H$ of size $h$ and a \textbf{tail set} $T$ of size $n - h$, with $h \geq K$ (enough head items to fill all recommendation slots)
+    \item $m$ users, each receiving $K$ recommendations
+    \item Head items have uniformly higher relevance: $r(u, i) = R_H$ for $i \in H$ and $r(u, i) = R_T$ for $i \in T$, with $R_H > R_T$
+    \item \textbf{Uniform visibility}: $\phi(k) = 1$ for all positions $k$ (exposure counts impressions, not position-weighted visibility)
+    \item \textbf{Uniform tie-breaking}: among items of equal relevance, the policy selects uniformly at random, so that expected exposure is spread evenly within each tier
+\end{itemize}
+\end{definition}
+
+Under this model, the two policies of interest have closed-form exposure distributions:
+
+\begin{definition}[Policy A: NDCG-Optimal]
+\label{def:policyA}
+Since $R_H > R_T$ and $h \geq K$, Lemma~\ref{lem:utility_max} implies the NDCG-optimal policy allocates all $K$ slots to head items. Under uniform tie-breaking and $\phi \equiv 1$, expected exposure is spread evenly within the head set:
+\begin{equation}
+    e_A(i) = \begin{cases} mK / h & \text{if } i \in H \\ 0 & \text{if } i \in T \end{cases}
+\end{equation}
+\end{definition}
+
+\begin{definition}[Policy B: Idealized Exposure-Aware Benchmark]
+\label{def:policyB}
+As a comparison policy, consider an idealized exposure-aware allocation that redirects one recommendation slot per user from head to tail:
+\begin{equation}
+    e_B(i) = \begin{cases} m(K-1) / h & \text{if } i \in H \\ m / (n - h) & \text{if } i \in T \end{cases}
+\end{equation}
+This represents the minimal departure from Policy~A that achieves nonzero tail exposure. It serves as a benchmark: if even this small redistribution reduces the Gini coefficient, then NDCG-optimal concentration is strictly suboptimal for exposure fairness.
+\end{definition}
+
+\begin{remark}
+Both policies serve the same total number of recommendations $mK$: Policy~A distributes $mK$ impressions across $h$ head items, while Policy~B distributes $m(K-1)$ to head items and $m$ to tail items.
+\end{remark}
+
+\begin{theorem}[NDCG-Optimal Gini Exceeds Exposure-Adjusted Gini\leanmark]
+\label{thm:gini_comparison}
+Under the two-tier model (Definition~\ref{def:two_tier}), if $n \geq 2$, $K \geq 1$, $h \geq K$, $h < n$, $m > 0$, and:
+\begin{equation}
+    2Kh < n(2K - 1)
+\end{equation}
+then:
+\begin{equation}
+    G(e_A) > G(e_B)
+\end{equation}
+That is, the NDCG-optimal policy produces strictly greater exposure inequality.
+\end{theorem}
+
+\begin{proof}
+Since both $e_A$ and $e_B$ are two-valued distributions (constant on $H$ and constant on $T$), the Gini coefficient of a two-part distribution with values $x$ on $h$ items and $y$ on $n - h$ items is:
+\begin{equation}
+    G = \frac{2h(n-h)|x - y|}{2n \cdot (hx + (n-h)y)}
+\end{equation}
+
+For Policy~A: $x_A = mK/h$, $y_A = 0$, giving $G(e_A) = \frac{2h(n-h) \cdot mK/h}{2n \cdot mK} = \frac{n-h}{n}$.
+
+For Policy~B: $x_B = m(K-1)/h$, $y_B = m/(n-h)$, giving:
+\begin{equation}
+    G(e_B) = \frac{2h(n-h)|m(K-1)/h - m/(n-h)|}{2n \cdot mK}
+\end{equation}
+
+The condition $2Kh < n(2K-1)$ ensures that $G(e_A) > G(e_B)$ after simplification. This condition is equivalent to $h/n < 1 - 1/(2K)$, which holds whenever the head set is a minority of the catalog. For typical recommendation settings ($K = 10$, $h/n = 0.1$), the condition $0.1 < 0.95$ is easily satisfied.
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/highergini.lean} --- complete proof over $\Q$ using the two-part Gini formula.
+\end{proof}
+
+% ----------------------------------------------------------------------------
+% 3.5 General Hypothesis
+% ----------------------------------------------------------------------------
+\subsection{General Hypothesis}
+\label{subsec:h1_statement}
+
+The two-tier model proves the core mechanism: NDCG optimization concentrates exposure, and exposure adjustment reduces this concentration. The general hypothesis extends this to arbitrary relevance distributions.
+
+\begin{assumption}[Long-Tail Relevance Structure]
+\label{assump:longtail}
+The relevance distribution satisfies:
+\begin{enumerate}[label=(\alph*)]
+    \item Items can be partitioned into $\mathcal{I}_{\text{head}}$ and $\mathcal{I}_{\text{tail}}$ with $|\mathcal{I}_{\text{head}}| / |\mathcal{I}| \leq \delta$ for some small $\delta > 0$.
+    \item For most users $u$, the top-$K$ items by relevance are drawn predominantly from $\mathcal{I}_{\text{head}}$.
+    \item The position visibility function $\phi$ satisfies $\phi(1) / \phi(K) \geq \gamma$ for some $\gamma > 1$ (position bias).
+\end{enumerate}
+\end{assumption}
+
+\begin{hypothesis}[Long-Tail Distribution Hypothesis --- General Form]
+\label{hyp:longtail}
+Let $\pi^*_{\NDCG}$ denote a policy obtained by optimizing the LiPO objective targeting NDCG. Let $\pi^*_{\text{exp}}$ denote a policy optimizing an exposure-regularized objective (Definition~\ref{def:exp_ndcg} below). Under Assumption~\ref{assump:longtail}:
+\begin{equation}
+    G_{\text{exp}}(\pi^*_{\NDCG}) > G_{\text{exp}}(\pi^*_{\text{exp}})
+\end{equation}
+That is, NDCG-optimized policies produce strictly higher exposure inequality than exposure-aware alternatives.
+\end{hypothesis}
+
+\begin{remark}
+Theorem~\ref{thm:gini_comparison} proves Hypothesis~\ref{hyp:longtail} for the special case of two-tier relevance distributions. The general case---for instance, under Pareto-distributed relevances---remains a conjecture, supported by the proven restricted case and amenable to empirical validation on deployed systems.
+\end{remark}
+
+% ----------------------------------------------------------------------------
+% 3.6 Trade-off Proposition
+% ----------------------------------------------------------------------------
+\subsection{The NDCG-Exposure Trade-off}
+\label{subsec:h1_tradeoff}
+
+\begin{proposition}[NDCG-Exposure Trade-off]
+\label{prop:ndcg_exposure}
+For recommendation policies over a fixed item catalog, there exists a trade-off between NDCG performance and exposure entropy. Specifically, let $H_{\text{exp}}(\pi) = -\sum_{i \in \mathcal{I}} p_i \log p_i$ where $p_i = \exposure(i; \pi) / \sum_j \exposure(j; \pi)$. Then:
+\begin{enumerate}[label=(\roman*)]
+    \item The policy $\pi^*_{\NDCG}$ that maximizes expected NDCG concentrates exposure on high-relevance items, yielding low $H_{\text{exp}}$.
+    \item The policy $\pi^*_H$ that maximizes exposure entropy distributes exposure uniformly, yielding suboptimal NDCG.
+    \item Over a compact policy class with bounded scores, the Pareto frontier of $(\NDCG, H_{\text{exp}})$ exists and is non-trivial, with intermediate policies achieving smooth trade-offs between the two extremes.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+Part (i) follows from Lemma~\ref{lem:utility_max}: NDCG-optimal rankings place high-relevance items in top positions, and under Assumption~\ref{assump:longtail}, these items are concentrated in $\mathcal{I}_{\text{head}}$, leading to concentrated exposure.
+
+Part (ii) is immediate: uniform exposure requires recommending each item with equal frequency across users, which necessarily places low-relevance items in top positions for some users, reducing NDCG.
+
+Part (iii) follows from standard multi-objective optimization theory: since both objectives are continuous in policy parameters over a compact policy class (finite item catalog, bounded scores), the Pareto frontier exists.
+\end{proof}
+
+\begin{corollary}[Tail Marginalization]
+\label{cor:tail_margin}
+Under NDCG optimization, items $i \in \mathcal{I}_{\text{tail}}$ satisfy:
+\begin{equation}
+    \Pr[\pi^*_{\NDCG,u}(k) = i \text{ for some } k \leq K] \ll \Pr[\pi^*_{\NDCG,u}(k) = j \text{ for some } k \leq K]
+\end{equation}
+for typical $j \in \mathcal{I}_{\text{head}}$, i.e., tail items are systematically excluded from recommendation sets.
+\end{corollary}
+
+% ----------------------------------------------------------------------------
+% 3.7 Proposed Remediation
+% ----------------------------------------------------------------------------
+\subsection{Proposed Remediation: Exposure-Adjusted Rank Discount}
+\label{subsec:h1_remediation}
+
+\begin{definition}[Exposure-Adjusted Discount]
+\label{def:exp_discount}
+Define the exposure-adjusted discount function using \textbf{exogenous} historical exposure:
+\begin{equation}
+    \discount_{\text{exp}}(k, i) = \log_2(k + 1) \cdot \left(1 + \beta \left(1 - \exp\left(-\gamma \cdot \exposure_{\text{hist}}(i)\right)\right)\right)
+\end{equation}
+where:
+\begin{itemize}
+    \item $\exposure_{\text{hist}}(i) \in [0, 1]$ is the normalized historical exposure from logged data (fixed per training iteration), scaled so that the maximum observed exposure maps to $1$
+    \item $\beta > 0$ controls the magnitude of exposure adjustment
+    \item $\gamma > 0$ controls the decay rate
+\end{itemize}
+Items with high historical exposure receive a larger discount (up to factor $1 + \beta$), reducing their DCG contribution and incentivizing the optimizer to promote lower-exposure items. Items with zero historical exposure receive no adjustment (factor $1$). This discount depends on item $i$ but \textbf{not} on the current policy $\pi$, avoiding circularity.
+\end{definition}
+
+\begin{definition}[Exposure-Regularized NDCG]
+\label{def:exp_ndcg}
+The exposure-regularized NDCG is:
+\begin{equation}
+    \NDCG^{\text{exp}}_K(u; \pi) = \frac{\sum_{k=1}^{K} \frac{\gain(r(u, \pi_u(k)))}{\discount_{\text{exp}}(k, \pi_u(k))}}{\IDCG^{\text{exp}}_K(u)}
+\end{equation}
+where $\IDCG^{\text{exp}}_K(u)$ is the maximum achievable value under the exposure-adjusted discounts.
+\end{definition}
+
+\begin{proposition}[Exposure Fairness Improvement]
+\label{prop:exp_fair}
+For $\beta > 0$ and $\exposure_{\text{hist}}$ satisfying $\exposure_{\text{hist}}(i) > \exposure_{\text{hist}}(j)$ for all $i \in \mathcal{I}_{\text{head}}$, $j \in \mathcal{I}_{\text{tail}}$ (i.e., historical exposure reflects a head-heavy pattern from any source), the policy $\pi^*_{\text{exp}}$ optimizing $\NDCG^{\text{exp}}$ satisfies:
+\begin{equation}
+    G_{\text{exp}}(\pi^*_{\text{exp}}) < G_{\text{exp}}(\pi^*_{\NDCG})
+\end{equation}
+\end{proposition}
+
+\begin{proof}[Proof Sketch]
+Under the corrected discount, items with high historical exposure receive a larger $\discount_{\text{exp}}$, reducing their contribution to the objective. This incentivizes the optimizer to promote lower-exposure items. In the two-tier special case, Theorem~\ref{thm:gini_comparison} proves that even the minimal redistribution (one slot per user shifted to tail) strictly reduces the Gini coefficient.
+\end{proof}
+
+% ============================================================================
+% SECTION 4: HYPOTHESIS II - HOMOGENEITY
+% ============================================================================
+\section{Homogeneous Recommendations: From Hypothesis to Conditional Theorem}
+\label{sec:hypothesis2}
+
+% ----------------------------------------------------------------------------
+% 4.1 Theoretical Foundation
+% ----------------------------------------------------------------------------
+\subsection{Theoretical Foundation}
+\label{subsec:h2_foundation}
+
+The second result addresses a different failure mode: even when exposure is distributed across items, NDCG optimization may produce \textit{homogeneous} recommendation slates that fail to capture the diversity value users derive from varied recommendations.
+
+\begin{definition}[Additive User Utility]
+\label{def:additive_utility}
+The additive utility model assumes user utility from a recommendation set $S$ is:
+\begin{equation}
+    U_{\text{add}}(S \mid u) = \sum_{i \in S} V(i \mid u)
+\end{equation}
+where $V(i \mid u)$ is the value of item $i$ to user $u$.
+\end{definition}
+
+\begin{definition}[Submodular User Utility]
+\label{def:submodular_utility}
+A utility function $U: 2^{\mathcal{I}} \rightarrow \R$ is submodular if for all $A \subseteq B \subseteq \mathcal{I}$ and $i \notin B$:
+\begin{equation}
+    U(A \cup \{i\}) - U(A) \geq U(B \cup \{i\}) - U(B)
+\end{equation}
+This captures diminishing returns: adding item $i$ to a smaller set provides more marginal value than adding it to a larger set.
+\end{definition}
+
+\begin{lemma}[Coverage Utility is Submodular\leanmark]
+\label{lem:coverage_submodular}
+Let $\mathcal{G}$ be a finite set of categories and $C: \mathcal{I} \to 2^{\mathcal{G}}$ a mapping from items to category sets. The coverage utility:
+\begin{equation}
+    U_{\text{cov}}(S) = \left|\bigcup_{i \in S} C(i)\right|
+\end{equation}
+is submodular. That is, for all $A \subseteq B \subseteq \mathcal{I}$ and $x \notin B$:
+\begin{equation}
+    U_{\text{cov}}(A \cup \{x\}) - U_{\text{cov}}(A) \geq U_{\text{cov}}(B \cup \{x\}) - U_{\text{cov}}(B)
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+The new categories contributed by adding $x$ to $A$ are $C(x) \setminus \bigcup_{i \in A} C(i)$. Since $A \subseteq B$, we have $\bigcup_{i \in A} C(i) \subseteq \bigcup_{i \in B} C(i)$, so $C(x) \setminus \bigcup_{i \in B} C(i) \subseteq C(x) \setminus \bigcup_{i \in A} C(i)$. Taking cardinalities gives the result.
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/submodular.lean}.
+\end{proof}
+
+% ----------------------------------------------------------------------------
+% 4.2 The Misalignment
+% ----------------------------------------------------------------------------
+\subsection{NDCG-Utility Misalignment Under Submodularity}
+\label{subsec:h2_misalignment}
+
+\begin{lemma}[NDCG-Optimal Set Equals Top-$K$ by Gain\leanmark]
+\label{lem:ndcg_additive}
+The NDCG-optimal ranking places items with the $K$ largest values of $\gain(r(u, i))$ in positions $1$ through $K$ (by Lemma~\ref{lem:utility_max}). Consequently, the induced recommendation set satisfies:
+\begin{equation}
+    S_K^{\NDCG}(u) = \argmax_{S: |S| = K} \sum_{i \in S} \gain(r(u, i))
+\end{equation}
+That is, the NDCG-optimal \emph{set} coincides with the top-$K$ items by individual gain---an additive selection criterion. NDCG itself is a ranked objective (position-weighted), but the set it selects is determined by an additive criterion.
+\end{lemma}
+
+\begin{proof}
+By Lemma~\ref{lem:utility_max}, the NDCG-optimal ranking sorts items by descending relevance. The top-$K$ items in this ranking are precisely those with the $K$ largest gain values, since $\gain$ is strictly increasing. The optimal \emph{set} (ignoring internal ordering) is therefore $\argmax_{|S|=K} \sum_{i \in S} \gain(r(u,i))$.
+
+We additionally prove an exchange lemma: if $S$ maximizes $F(S) = \max_\sigma \sum_k v(k) \cdot g(\sigma(k))$ over all sets of size $K$, then every item in $S$ has a $g$-value at least as large as every item outside $S$. The proof proceeds by showing that swapping a lower-gain item in $S$ for a higher-gain item outside $S$ strictly increases $F$.
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/argmax.lean} --- exchange lemma and optimality theorem.
+\end{proof}
+
+\begin{theorem}[Submodular Misalignment Gap is $\Omega(K)$\leanmark]
+\label{thm:submodular_misalign}
+There exist instances with $n = K^2$ items, a relevance function $r$, and a submodular coverage utility $U_{\text{cov}}$ such that \emph{there exists} an NDCG-optimal set $S_K^{\NDCG}$ with:
+\begin{equation}
+    \frac{U_{\text{cov}}(S_K^*)}{U_{\text{cov}}(S_K^{\NDCG})} = K
+\end{equation}
+where $S_K^* = \argmax_{|S|=K} U_{\text{cov}}(S)$. That is, NDCG provides no incentive to avoid redundancy, and in the worst case over NDCG-optimal tie-breaking, the utility gap is exactly $K$.
+\end{theorem}
+
+\begin{proof}
+\textbf{Construction}: Define $K$ groups of $K$ items each: for $m \in \{1, \ldots, K\}$ and $j \in \{1, \ldots, K\}$, item $(m, j)$ belongs to category $m$. All items have relevance~1.
+
+\textbf{NDCG-optimal set $T$}: Since all items have equal relevance, any set of $K$ items is NDCG-optimal. Consider $T = \{(1, j) : j = 1, \ldots, K\}$---all items from category~1. Then $U_{\text{cov}}(T) = |\{1\}| = 1$.
+
+\textbf{Coverage-optimal set $S^*$}: Select one item from each category: $S^* = \{(m, 1) : m = 1, \ldots, K\}$. Then $U_{\text{cov}}(S^*) = |\{1, \ldots, K\}| = K$.
+
+\textbf{Gap}: $U_{\text{cov}}(S^*) / U_{\text{cov}}(T) = K$.
+
+The Lean proof additionally verifies that $T$ is a valid maximizer of total relevance among all sets of size $K$ (since all items have relevance~1, every size-$K$ set achieves the same total relevance).
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/coverage.lean} --- construction, cardinalities, and gap.
+\end{proof}
+
+% ----------------------------------------------------------------------------
+% 4.3 Coverage-Homogeneity Link
+% ----------------------------------------------------------------------------
+\subsection{From Low Coverage to High Homogeneity}
+\label{subsec:coverage_homogeneity}
+
+\begin{definition}[Recommendation Homogeneity]
+\label{def:homogeneity}
+A recommendation set $S$ exhibits homogeneity with respect to similarity measure $\text{sim}: \mathcal{I} \times \mathcal{I} \rightarrow [0, 1]$ if:
+\begin{equation}
+    \text{Homogeneity}(S) = \frac{1}{|S|(|S|-1)} \sum_{\substack{i, j \in S \\ i \neq j}} \text{sim}(i, j) > \tau
+\end{equation}
+for some threshold $\tau$.
+\end{definition}
+
+\begin{lemma}[Low Coverage Implies High Homogeneity\leanmark]
+\label{lem:coverage_homogeneity}
+Suppose items are partitioned into categories $\mathcal{C}_1, \ldots, \mathcal{C}_M$ and that similarity satisfies:
+\begin{itemize}
+    \item \textbf{Intra-category}: $\mathrm{sim}(i, j) \geq s_{\mathrm{high}}$ for $i, j$ in the same category
+    \item \textbf{Inter-category}: $\mathrm{sim}(i, j) \leq s_{\mathrm{low}}$ for $i, j$ in different categories
+\end{itemize}
+with $s_{\mathrm{high}} > s_{\mathrm{low}}$. Then for any two sets $S_1, S_2$ of equal size, if $S_1$ covers fewer categories than $S_2$, then $\mathrm{Homogeneity}(S_1) \geq \mathrm{Homogeneity}(S_2)$.
+\end{lemma}
+
+\begin{proof}
+The average pairwise similarity of a set $S$ is a weighted average of intra-category pairs (each contributing $\geq s_{\text{high}}$) and inter-category pairs (each contributing $\leq s_{\text{low}}$). A set covering fewer categories has proportionally more intra-category pairs, increasing the average.
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/homogeneity.lean}.
+\end{proof}
+
+% ----------------------------------------------------------------------------
+% 4.4 Conditional Theorem
+% ----------------------------------------------------------------------------
+\subsection{Conditional Homogeneity Theorem}
+\label{subsec:h2_statement}
+
+\begin{assumption}[Domain-Specific Similarity Structure]
+\label{assump:similarity}
+In domains such as content streaming, e-commerce, and news recommendation:
+\begin{enumerate}[label=(\alph*)]
+    \item High-relevance items tend to be similar to each other (``viral'' content shares characteristics).
+    \item User preferences exhibit positive correlation across users for popular items.
+    \item Item similarity $\text{sim}(i, j)$ correlates with relevance proximity: if $r(u, i) \approx r(u, j)$ is high for many users, then $\text{sim}(i, j)$ tends to be high.
+\end{enumerate}
+\end{assumption}
+
+\begin{theorem}[Conditional Homogeneity Theorem]
+\label{thm:conditional_homogeneity}
+Under Assumption~\ref{assump:similarity} and with user utility given by a submodular coverage function (Lemma~\ref{lem:coverage_submodular}), the following hold:
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{(Additive selection\leanmark)} The NDCG-optimal set $S_K^{\NDCG}$ consists of the $K$ items with the largest individual gains (Lemma~\ref{lem:ndcg_additive}).
+    \item \textbf{(Utility gap\leanmark)} There exist instances where $U_{\mathrm{cov}}(S_K^*) / U_{\mathrm{cov}}(S_K^{\NDCG}) = \Omega(K)$ (Theorem~\ref{thm:submodular_misalign}).
+    \item \textbf{(Homogeneity\leanmark)} Low coverage implies high homogeneity under any similarity structure satisfying Lemma~\ref{lem:coverage_homogeneity}.
+    \item \textbf{(Conclusion)} Under Assumption~\ref{assump:similarity}, the top-$K$ items by gain are drawn from fewer categories and exhibit higher pairwise similarity than the coverage-optimal set of the same size. Consequently:
+    \begin{equation}
+        \E_{u \sim \mathcal{U}}[\mathrm{Homogeneity}(S_K(u; \pi^*_{\text{LiPO}}))] > \E_{u \sim \mathcal{U}}[\mathrm{Homogeneity}(S_K(u; \pi^*_{\text{div}}))]
+    \end{equation}
+    where $\pi^*_{\text{div}}$ is any policy incorporating submodular diversity objectives.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+Parts (i)--(iii) are individually proved and formally verified as indicated. The conclusion (iv) follows by chaining: Assumption~\ref{assump:similarity} ensures the top-$K$ items by gain cluster in few categories (high relevance $\Rightarrow$ high similarity $\Rightarrow$ low category coverage). Lemma~\ref{lem:coverage_homogeneity} then converts low coverage to high homogeneity. The gap from Theorem~\ref{thm:submodular_misalign} quantifies the severity: the NDCG-selected set can have $K$ times less coverage utility than the optimal diverse set.
+\end{proof}
+
+\begin{remark}
+Every step in Theorem~\ref{thm:conditional_homogeneity} except the final chaining through Assumption~\ref{assump:similarity} is machine-verified. Assumption~\ref{assump:similarity} is empirically testable: one computes the average pairwise similarity of the top-$K$ items by gain versus a random baseline on standard datasets (e.g., MovieLens, Amazon Reviews, Spotify). Validating this assumption on public benchmarks is a priority for future work.
+\end{remark}
+
+\begin{remark}[Connection to Generative Mode Collapse]
+\label{rem:mode_collapse}
+In generative recommendation systems, this homogeneity problem is amplified by LLM mode collapse. The autoregressive generation process tends to repeat high-probability tokens/items, and when the training objective (LiPO) rewards concentration on high-relevance items, the model learns to generate the same ``safe'' popular items across users, reinforcing the pattern through the feedback loop of training on its own outputs.
+\end{remark}
+
+% ----------------------------------------------------------------------------
+% 4.5 Proposed Remediation
+% ----------------------------------------------------------------------------
+\subsection{Proposed Remediation: Coverage-Constrained Regularization}
+\label{subsec:h2_remediation}
+
+\begin{definition}[Category Coverage Constraint]
+\label{def:coverage}
+Let $\mathcal{C}_1, \mathcal{C}_2, \ldots, \mathcal{C}_M$ be a partition of items into categories. The coverage constraint requires:
+\begin{equation}
+    \forall m \in \{1, \ldots, M\}: \quad |S_K(u; \pi) \cap \mathcal{C}_m| \geq c_m
+\end{equation}
+where $c_m$ is the minimum coverage for category $m$.
+\end{definition}
+
+\begin{definition}[Coverage-Regularized LiPO Objective]
+\label{def:coverage_lipo}
+We propose the coverage-regularized objective:
+\begin{equation}
+    \mathcal{L}_{\text{LiPO-Cov}}(\theta) = \mathcal{L}_{\text{LiPO}}(\theta) + \mu \cdot \mathcal{R}_{\text{cov}}(\theta)
+\end{equation}
+where the coverage regularizer is:
+\begin{equation}
+    \mathcal{R}_{\text{cov}}(\theta) = \E_{u \sim \mathcal{U}} \left[ \sum_{m=1}^{M} \max\left(0, c_m - |S_K(u; \pi_\theta) \cap \mathcal{C}_m|\right)^2 \right]
+\end{equation}
+\end{definition}
+
+\begin{remark}[Differentiability]
+\label{rem:differentiability}
+Both $\mathcal{R}_{\text{cov}}$ and $\mathcal{R}_{\text{DPP}}$ (below) depend on the discrete recommendation set $S_K$, which is not differentiable in the usual sense. Practical implementation requires either differentiable top-$K$ surrogates, policy-gradient estimators (e.g., REINFORCE), or a two-stage approach where a relevance model is trained via LiPO and a submodular-aware reranker is applied at inference time. The choice of relaxation is orthogonal to the theoretical analysis but essential for deployment.
+\end{remark}
+
+\begin{definition}[Determinantal Point Process Regularization]
+\label{def:dpp}
+For continuous diversity promotion, we propose DPP-based regularization:
+\begin{equation}
+    \mathcal{R}_{\text{DPP}}(\theta) = -\E_{u \sim \mathcal{U}} \left[ \log \det(L_{S_K(u; \pi_\theta)}) \right]
+\end{equation}
+where $L$ is a positive semidefinite DPP kernel matrix with $L_{ij} = q_i q_j \cdot \text{sim}(i, j)$ and $q_i = \sqrt{\gain(r(u, i))}$ balances quality and diversity. (Positive semidefiniteness is guaranteed when $\text{sim}$ is a valid kernel, e.g., cosine similarity on normalized embeddings.)
+\end{definition}
+
+\begin{theorem}[Greedy Submodular Approximation Guarantee\leanmark]
+\label{thm:nwf}
+(Nemhauser, Wolsey, and Fisher~\cite{nemhauser1978}) For any non-negative monotone submodular function $U$ with $U(\emptyset) = 0$ and cardinality constraint $|S| \leq K$, the greedy algorithm that iteratively adds the element with the largest marginal gain produces a set $S_{\mathrm{greedy}}$ satisfying:
+\begin{equation}
+    U(S_{\mathrm{greedy}}) \geq \left(1 - \frac{1}{e}\right) \cdot U(S^*)
+\end{equation}
+where $S^* = \argmax_{|S| \leq K} U(S)$.
+\end{theorem}
+
+\begin{proof}
+The proof establishes a recurrence relation for the optimality gap: at each greedy step $k$, submodularity and the greedy choice imply:
+\begin{equation}
+    U(S^*) - U(S_{k+1}) \leq \left(1 - \frac{1}{K}\right)(U(S^*) - U(S_k))
+\end{equation}
+Solving the recurrence gives $U(S^*) - U(S_K) \leq (1 - 1/K)^K \cdot U(S^*)$. The classical inequality $(1 - 1/K)^K \leq 1/e$ then yields $U(S_K) \geq (1 - 1/e) \cdot U(S^*)$.
+
+\smallskip
+\noindent\textit{Lean verification}: \texttt{Lipo/approximationgreed.lean} --- recurrence, solution, and connection to $e^{-1}$ via Mathlib's \texttt{Real.one\_sub\_div\_pow\_le\_exp\_neg}.
+\end{proof}
+
+\begin{remark}[Practical Significance]
+Theorem~\ref{thm:nwf} combined with Theorem~\ref{thm:submodular_misalign} reveals a stark contrast: greedy submodular-aware methods \textit{provably} achieve $\geq 63.2\%$ of optimal coverage utility, while NDCG optimization can achieve as little as $1/K$ of optimal. For $K = 10$, this is a $6.3\times$ gap in worst-case guarantees. Note that the $(1-1/e)$ bound applies to the \textbf{discrete greedy algorithm} (iterative best-marginal-gain selection); FD-LiPO uses continuous relaxation via gradient descent and does not inherit this guarantee directly. The bound motivates submodular-aware objective design but does not certify the approximation quality of any specific gradient-based method.
+\end{remark}
+
+\begin{proposition}[Diversity-Relevance Trade-off]
+\label{prop:diversity_tradeoff}
+There exist values of $\mu > 0$ such that $\pi^*_{\text{LiPO-Cov}}$ achieves:
+\begin{equation}
+    \text{Homogeneity}(S_K(u; \pi^*_{\text{LiPO-Cov}})) < \text{Homogeneity}(S_K(u; \pi^*_{\text{LiPO}}))
+\end{equation}
+with bounded NDCG degradation:
+\begin{equation}
+    \NDCG(\pi^*_{\text{LiPO}}) - \NDCG(\pi^*_{\text{LiPO-Cov}}) \leq \epsilon(\mu)
+\end{equation}
+where $\epsilon(\mu) \to 0$ as $\mu \to 0$.
+\end{proposition}
+
+% ============================================================================
+% SECTION 5: UNIFIED FRAMEWORK
+% ============================================================================
+\section{Unified Remediation Framework}
+\label{sec:unified}
+
+% ----------------------------------------------------------------------------
+% 5.1 Combined Objective
+% ----------------------------------------------------------------------------
+\subsection{Combined Objective Formulation}
+\label{subsec:combined}
+
+We propose a unified framework addressing both the long-tail and homogeneity problems:
+
+\begin{definition}[Fair Diverse LiPO (FD-LiPO)]
+\label{def:fd_lipo}
+The Fair Diverse LiPO objective is:
+\begin{equation}
+\boxed{
+    \mathcal{L}_{\text{FD-LiPO}}(\theta) = \mathcal{L}_{\text{LiPO}}^{\text{exp}}(\theta) + \mu \cdot \mathcal{R}_{\text{cov}}(\theta) + \nu \cdot \mathcal{R}_{\text{DPP}}(\theta)
+}
+\end{equation}
+where:
+\begin{itemize}
+    \item $\mathcal{L}_{\text{LiPO}}^{\text{exp}}$ uses exposure-adjusted discounts (Definition~\ref{def:exp_discount}) with exogenous $\exposure_{\text{hist}}$
+    \item $\mathcal{R}_{\text{cov}}$ enforces category coverage (Definition~\ref{def:coverage_lipo})
+    \item $\mathcal{R}_{\text{DPP}}$ promotes diversity via DPP (Definition~\ref{def:dpp})
+    \item $\mu, \nu \geq 0$ are regularization hyperparameters
+\end{itemize}
+\end{definition}
+
+% ----------------------------------------------------------------------------
+% 5.2 Optimization Algorithm
+% ----------------------------------------------------------------------------
+\subsection{Optimization Algorithm}
+\label{subsec:algorithm}
+
+\begin{algorithm}[H]
+\caption{Fair Diverse LiPO Training}
+\label{alg:fd_lipo}
+\begin{algorithmic}[1]
+\Require Policy $\pi_\theta$, reference policy $\pi_{\text{ref}}$, hyperparameters $\beta, \gamma, \mu, \nu, \alpha$
+\Require Initial historical exposure $\{\exposure_{\text{hist}}^{(0)}(i)\}_{i \in \mathcal{I}}$ from logged data
+\For{each training iteration $t$}
+    \State \textbf{// Exposure statistics are exogenous for this iteration}
+    \State Freeze $\exposure_{\text{hist}}^{(t)}$ for all items
+    \State Sample batch of users $\mathcal{B} \subset \mathcal{U}$
+    \For{each $u \in \mathcal{B}$}
+        \State Generate ranking $\pi_\theta(\cdot \mid u)$ via Plackett-Luce sampling
+        \State Compute exposure-adjusted discounts: $\discount_{\text{exp}}(k, i) = \log_2(k+1)(1 + \beta (1 - e^{-\gamma \exposure_{\text{hist}}^{(t)}(i)}))$
+        \State Compute $\mathcal{L}_{\text{LiPO}}^{\text{exp}}$ using adjusted discounts
+        \State Compute coverage penalty $\mathcal{R}_{\text{cov}}$
+        \State Compute DPP regularizer $\mathcal{R}_{\text{DPP}}$
+    \EndFor
+    \State Update $\theta \leftarrow \theta - \eta \nabla_\theta \mathcal{L}_{\text{FD-LiPO}}$
+    \State \textbf{// Update exposure statistics for next iteration (EMA)}
+    \State $\exposure_{\text{hist}}^{(t+1)}(i) \leftarrow \alpha \cdot \exposure_{\text{hist}}^{(t)}(i) + (1-\alpha) \cdot \exposure_{\text{batch}}^{(t)}(i)$ for all $i$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+% ----------------------------------------------------------------------------
+% 5.3 Theoretical Properties
+% ----------------------------------------------------------------------------
+\subsection{Theoretical Properties}
+\label{subsec:properties}
+
+\begin{proposition}[FD-LiPO Stationarity]
+\label{prop:convergence}
+At each training iteration $t$, with $\exposure_{\text{hist}}^{(t)}$ frozen, the objective $\mathcal{L}_{\text{FD-LiPO}}^{(t)}$ is a well-defined function of $\theta$ and admits standard gradient-based optimization. However, the EMA update to $\exposure_{\text{hist}}$ between iterations creates a non-stationary optimization landscape. Convergence of the joint $(\theta, \exposure_{\text{hist}})$ dynamics requires the EMA rate $\alpha$ and learning rate $\eta$ to satisfy a two-timescale separation condition (the exposure statistics must update slowly relative to policy parameters); formal analysis via two-timescale stochastic approximation theory~\cite{borkar2008} is left to future work.
+\end{proposition}
+
+\begin{proposition}[Multi-Objective Trade-off]
+\label{prop:pareto}
+The family of solutions $\{\theta^*(\mu, \nu) : \mu, \nu \geq 0\}$ traces a surface in the three-dimensional objective space:
+\begin{equation}
+    (\NDCG(\pi_\theta), \; G_{\text{exp}}(\pi_\theta), \; \text{Homogeneity}(S_K(\cdot; \pi_\theta)))
+\end{equation}
+allowing practitioners to select operating points based on application requirements.
+\end{proposition}
+
+% ============================================================================
+% SECTION 6: DISCUSSION
+% ============================================================================
+\section{Discussion and Future Directions}
+\label{sec:discussion}
+
+% ----------------------------------------------------------------------------
+% 6.1 Implications
+% ----------------------------------------------------------------------------
+\subsection{Implications for Generative Recommendation Systems}
+\label{subsec:implications}
+
+The theorems and framework presented have significant implications:
+
+\begin{enumerate}[label=\textbf{I.\arabic*}]
+    \item \textbf{Metric-Objective Alignment}: Pure NDCG optimization creates a provable mismatch between the training objective (additive, relevance-based) and true user utility (often submodular, diversity-aware). The gap is not merely possible but can be as large as $\Omega(K)$ (Theorem~\ref{thm:submodular_misalign}), and greedy submodular methods provably recover at least $63.2\%$ of optimal (Theorem~\ref{thm:nwf}).
+    
+    \item \textbf{Long-Tail Inventory}: For platforms with significant long-tail inventory, NDCG-optimized LiPO produces strictly higher exposure inequality than exposure-adjusted alternatives (Theorem~\ref{thm:gini_comparison}), systematically underexposing niche items.
+    
+    \item \textbf{Feedback Loops}: In deployed systems, homogeneous recommendations lead to homogeneous user engagement data, which further reinforces homogeneity in retraining---a vicious cycle that FD-LiPO is designed to break.
+\end{enumerate}
+
+% ----------------------------------------------------------------------------
+% 6.2 Limitations
+% ----------------------------------------------------------------------------
+\subsection{Limitations}
+\label{subsec:limitations}
+
+\begin{enumerate}[label=\textbf{L.\arabic*}]
+    \item \textbf{Two-tier model}: Theorem~\ref{thm:gini_comparison} is proved for a simplified two-tier relevance model. The general case under continuous relevance distributions (e.g., Pareto) remains a conjecture. The two-tier model captures the core mechanism but does not model the smooth gradient between popular and niche items.
+    
+    \item \textbf{Assumption~\ref{assump:similarity}}: The homogeneity result (Theorem~\ref{thm:conditional_homogeneity}) is conditional on high-relevance items being similar. This is domain-dependent and requires empirical validation for specific applications.
+    
+    \item The exposure-adjusted discount introduces hyperparameters ($\beta$, $\gamma$, $\alpha$) requiring careful tuning, though the exogenous treatment simplifies optimization.
+    
+    \item The DPP regularizer has computational complexity $O(K^3)$ per user; efficient approximations (e.g., greedy MAP inference) may be needed at scale.
+    
+    \item The theoretical framework assumes access to ground-truth relevance; in practice, relevance is estimated from noisy feedback.
+\end{enumerate}
+
+% ----------------------------------------------------------------------------
+% 6.3 Future Work
+% ----------------------------------------------------------------------------
+\subsection{Future Research Directions}
+\label{subsec:future}
+
+\begin{enumerate}[label=\textbf{F.\arabic*}]
+    \item \textbf{Empirical validation of Assumption~\ref{assump:similarity}}: Compute average pairwise similarity of top-$K$ items versus random baselines on MovieLens, Amazon Reviews, and Spotify datasets. This is the single remaining empirical gap in the Hypothesis~II proof chain.
+    
+    \item \textbf{Power-law extension}: Extend Theorem~\ref{thm:gini_comparison} to Pareto-distributed relevances, where the Gini gap should be expressible in terms of the shape parameter $\alpha$.
+    
+    \item Empirical validation on large-scale generative recommendation systems, measuring both exposure Gini and user-perceived diversity.
+    
+    \item Investigation of mode collapse dynamics in LLM-based recommenders and their interaction with LiPO training.
+    
+    \item Extension to multi-stakeholder settings with producer fairness constraints.
+    
+    \item Adaptive hyperparameter selection for $\mu$, $\nu$ based on real-time diversity metrics.
+\end{enumerate}
+
+% ============================================================================
+% SECTION 7: CONCLUSION
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper has presented a rigorous mathematical framework analyzing structural limitations of Listwise Preference Optimization in generative recommendation systems. Through two central results---the Long-Tail Distribution Theorem (restricted form, Theorem~\ref{thm:gini_comparison}) and the Conditional Homogeneity Theorem (Theorem~\ref{thm:conditional_homogeneity})---we have proved that NDCG optimization via LiPO creates systematic biases against tail items and diverse recommendations, with a utility gap that can reach $\Omega(K)$.
+
+Eight core mathematical results have been formally verified in Lean~4 using the Aristotle automated theorem prover, providing machine-checked certainty for the foundations of both results. The proof scripts are publicly available at \url{https://github.com/Ryheff24/LiPO-Proof}.
+
+Our proposed remediation framework, Fair Diverse LiPO (FD-LiPO), addresses these issues through exposure-adjusted discounting (with exogenous historical exposure to avoid circularity) and coverage/DPP-based diversity regularization, backed by the $(1 - 1/e)$ greedy approximation guarantee for submodular objectives.
+
+% ============================================================================
+% REFERENCES
+% ============================================================================
+\newpage
+\section*{References}
+\addcontentsline{toc}{section}{References}
+
+\begin{thebibliography}{99}
+
+\bibitem{liu2024lipo}
+Liu, Z., Zeng, Y., Miao, J., et al.
+\textit{LiPO: Listwise Preference Optimization through Learning-to-Rank}.
+arXiv:2402.01878, 2024.
+
+\bibitem{burges2010ranknet}
+Burges, C. J. C.
+\textit{From RankNet to LambdaRank to LambdaMART: An Overview}.
+Microsoft Research Technical Report MSR-TR-2010-82, 2010.
+
+\bibitem{nemhauser1978}
+Nemhauser, G. L., Wolsey, L. A., Fisher, M. L.
+\textit{An Analysis of Approximations for Maximizing Submodular Set Functions---I}.
+Mathematical Programming, 14(1):265--294, 1978.
+
+\bibitem{aristotle2025}
+Harmonic.
+\textit{Aristotle: Automated Theorem Proving for Lean~4}.
+\url{https://aristotle.harmonic.fun}, 2025.
+
+\bibitem{lean4}
+de Moura, L., Ullrich, S.
+\textit{The Lean~4 Theorem Prover and Programming Language}.
+In Automated Deduction -- CADE 28, pp.~625--635. Springer, 2021.
+
+\bibitem{singh2018fairness}
+Singh, A., Joachims, T.
+\textit{Fairness of Exposure in Rankings}.
+In Proceedings of KDD, 2018.
+
+\bibitem{biega2018equity}
+Biega, A. J., Gummadi, K. P., Weikum, G.
+\textit{Equity of Attention: Amortizing Individual Fairness in Rankings}.
+In Proceedings of SIGIR, 2018.
+
+\bibitem{carbonell1998mmr}
+Carbonell, J., Goldstein, J.
+\textit{The Use of MMR, Diversity-Based Reranking for Reordering Documents and Producing Summaries}.
+In Proceedings of SIGIR, 1998.
+
+\bibitem{chen2018dpp}
+Chen, L., Zhang, G., Zhou, E.
+\textit{Fast Greedy MAP Inference for Determinantal Point Process to Improve Recommendation Diversity}.
+In Proceedings of NeurIPS, 2018.
+
+\bibitem{steck2018calibrated}
+Steck, H.
+\textit{Calibrated Recommendations}.
+In Proceedings of RecSys, 2018.
+
+\bibitem{mitra2018utility}
+Mitra, B., Craswell, N.
+\textit{An Introduction to Neural Information Retrieval}.
+Foundations and Trends in Information Retrieval, 2018.
+
+\bibitem{wang2016position}
+Wang, X., Bendersky, M., Metzler, D., Najork, M.
+\textit{Learning to Rank with Selection Bias in Personal Search}.
+In Proceedings of SIGIR, 2016.
+
+\bibitem{borkar2008}
+Borkar, V. S.
+\textit{Stochastic Approximation: A Dynamical Systems Viewpoint}.
+Cambridge University Press, 2008.
+
+\end{thebibliography}
+
+% ============================================================================
+% APPENDIX
+% ============================================================================
+\newpage
+\appendix
+
+\section{Formal Verification Details}
+\label{app:verification}
+
+\subsection{Lean~4 Proof Summary}
+\label{app:lean_summary}
+
+Table~\ref{tab:lean_proofs} summarizes all formally verified results. Each row corresponds to a Lean source file in the repository at \url{https://github.com/Ryheff24/LiPO-Proof}. All proofs compile against \texttt{leanprover/lean4:v4.24.0} with Mathlib commit \texttt{f897ebcf}.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lllp{5.5cm}@{}}
+\toprule
+\textbf{\#} & \textbf{File} & \textbf{Paper Result} & \textbf{Lean Theorem Name} \\
+\midrule
+1 & \texttt{maximized.lean} & Lemma~\ref{lem:utility_max} & \texttt{rearrangement\_maximization} \\
+2 & \texttt{argmax.lean} & Lemma~\ref{lem:ndcg_additive} & \texttt{optimal\_set\_contains\_largest\_values} \\
+3 & \texttt{submodular.lean} & Lemma~\ref{lem:coverage_submodular} & \texttt{coverage\_submodular} \\
+4 & \texttt{coverage.lean} & Theorem~\ref{thm:submodular_misalign} & \texttt{gap\_is\_K} \\
+5 & \texttt{gini.lean} & Proposition~\ref{prop:gini_lower_bound} & \texttt{gini\_lower\_bound} \\
+6 & \texttt{highergini.lean} & Theorem~\ref{thm:gini_comparison} & \texttt{gini\_policy\_A\_gt\_policy\_B} \\
+7 & \texttt{approximationgreed.lean} & Theorem~\ref{thm:nwf} & \texttt{Nemhauser\_Wolsey\_Fisher\_Corrected} \\
+8 & \texttt{homogeneity.lean} & Lemma~\ref{lem:coverage_homogeneity} & \texttt{[see repository]} \\
+\bottomrule
+\end{tabular}
+\caption{Formally verified results with corresponding Lean source files and theorem names.}
+\label{tab:lean_proofs}
+\end{table}
+
+\subsection{What Verification Guarantees}
+\label{app:verification_guarantees}
+
+Lean~4 verification provides the following guarantee: every logical step from axioms (the Calculus of Inductive Constructions plus Lean's axioms of \texttt{propext}, \texttt{Quot.sound}, and \texttt{Classical.choice}) to the final theorem statement has been mechanically checked by the kernel. If the file compiles with no \texttt{sorry} placeholders and no errors, the theorem is correct.
+
+This is a strictly stronger guarantee than peer review, which checks proof \textit{sketches} for plausibility. Lean checks every step of the actual proof.
+
+\subsection{What Verification Does Not Guarantee}
+\label{app:verification_limits}
+
+Formal verification certifies that the Lean theorem statement is a logical consequence of the axioms. It does \textit{not} guarantee:
+\begin{itemize}
+    \item That the Lean statement faithfully captures the intended mathematical claim (the ``formalization gap'')
+    \item That the modeling assumptions reflect reality (e.g., the two-tier model is a simplification)
+    \item That empirical assumptions (Assumption~\ref{assump:similarity}) hold in practice
+\end{itemize}
+
+We have taken care to state Lean theorems that closely mirror the paper's definitions, but the reader should inspect the Lean source to confirm.
+
+\section{Extended Proofs}
+\label{app:proofs}
+
+\subsection{Detailed Proof of Theorem~\ref{thm:submodular_misalign}}
+\label{app:proof_misalign}
+
+\begin{proof}
+The full construction is given in the proof of Theorem~\ref{thm:submodular_misalign} in Section~\ref{subsec:h2_misalignment}. The Lean formalization in \texttt{Lipo/coverage.lean} additionally verifies all cardinality claims (\texttt{T\_card}, \texttt{S\_star\_coverage\_eq\_K}, \texttt{T\_coverage\_eq\_1}) and the maximality of $T$ under total relevance (\texttt{T\_is\_maximizer}).
+\end{proof}
+
+\subsection{Plackett-Luce Gradient Derivation}
+\label{app:pl_gradient}
+
+For completeness, we derive the gradient of the Plackett-Luce log-likelihood with respect to score parameters.
+
+Given scores $s = (s_1, \ldots, s_n)$ and observed ranking $(y_1, \ldots, y_K)$:
+\begin{equation}
+    \log P_{\text{PL}}(\bm{y} \mid s) = \sum_{k=1}^K \left[ s_{y_k} - \log \sum_{j \in \mathcal{C}_k} \exp(s_j) \right]
+\end{equation}
+
+The gradient with respect to $s_i$:
+\begin{equation}
+    \frac{\partial \log P_{\text{PL}}}{\partial s_i} = \sum_{k: i \in \mathcal{C}_k} \left[ \mathbb{1}[y_k = i] - \frac{\exp(s_i)}{\sum_{j \in \mathcal{C}_k} \exp(s_j)} \right]
+\end{equation}
+
+This is the difference between the indicator (1 if item $i$ was selected at some position where it was available) and the expected selection probability under the current scores---exactly the form used in LambdaRank-style updates.
+
+\section{Notation Summary}
+\label{app:notation}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}cl@{}}
+\toprule
+\textbf{Symbol} & \textbf{Description} \\
+\midrule
+$\mathcal{U}, \mathcal{I}$ & User set, Item catalog \\
+$r(u, i)$ & Relevance of item $i$ to user $u$ \\
+$\pi, \pi_u(k)$ & Ranking policy, Item at position $k$ for user $u$ \\
+$S_K(u; \pi)$ & Top-$K$ recommendation set \\
+$\DCG_K, \NDCG_K$ & Discounted Cumulative Gain, Normalized DCG \\
+$P_{\text{PL}}$ & Plackett-Luce probability \\
+$\exposure(i; \pi)$ & Exposure of item $i$ under policy $\pi$ \\
+$\exposure_{\text{hist}}(i)$ & Historical exposure (exogenous, from logs) \\
+$G_{\text{exp}}$ & Exposure Gini coefficient \\
+$H_{\text{exp}}$ & Exposure entropy \\
+$U_{\text{add}}, U_{\text{sub}}$ & Additive utility, Submodular utility \\
+$U_{\text{cov}}$ & Coverage utility (submodular) \\
+$\mathcal{R}_{\text{cov}}, \mathcal{R}_{\text{DPP}}$ & Coverage regularizer, DPP diversity regularizer \\
+$\beta, \gamma$ & Exposure adjustment hyperparameters \\
+$\mu, \nu$ & Regularization weights \\
+$\alpha$ & EMA smoothing parameter \\
+\leanmark & Formally verified in Lean~4 \\
+\bottomrule
+\end{tabular}
+\caption{Summary of notation used throughout the paper.}
+\label{tab:notation}
+\end{table}
+
+\end{document}
